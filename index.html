@@ -125,7 +125,7 @@
                     formData.append('audio', audioBlob, 'recording.webm');
 
                     try {
-                        const response = await fetch(FLASK_API_URL, {
+                       const response = await fetch(FLASK_API_URL + '/process_audio', {
                             method: 'POST',
                             body: formData
                         });
