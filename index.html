@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Assistant Vocal Luxembourgeois PoC</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 100%;
+            max-width: 500px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 12px 25px;
+            font-size: 1.1em;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            color: white;
+            background-color: #007bff;
+            transition: background-color 0.3s ease;
+            margin: 10px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 20px;
+            font-size: 1em;
+            color: #555;
+            min-height: 20px; /* Pour éviter le "saut" du contenu */
+        }
+        #transcribedText, #geminiResponse {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            text-align: left;
+            word-wrap: break-word;
+            white-space: pre-wrap; /* Pour conserver les sauts de ligne de Gemini */
+        }
+        #geminiResponse {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        #transcribedText {
+            border: 1px solid #c3e6cb;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Assistant Vocal Luxembourgeois PoC</h1>
+        <button id="startButton">Démarrer l'enregistrement</button>
+        <button id="stopButton" disabled>Arrêter l'enregistrement</button>
+        <div id="status">Prêt.</div>
+        <p>Transcription LuxASR :</p>
+        <div id="transcribedText"></div>
+        <p>Réponse Gemini :</p>
+        <div id="geminiResponse"></div>
+</div>
+    <script>
+        const startButton = document.getElementById('startButton');
+        const stopButton = document.getElementById('stopButton');
+        const statusDiv = document.getElementById('status');
+        const transcribedTextDiv = document.getElementById('transcribedText');
+        const geminiResponseDiv = document.getElementById('geminiResponse');
+
+        let mediaRecorder;
+        let audioChunks = [];
+        let recognitionInProgress = false;
+
+        // TRÈS IMPORTANT : REMPLACEZ CETTE URL PAR L'URL DE VOTRE APPLICATION FLASK SUR PYTHONANYWHERE
+        const FLASK_API_URL = "https://lux-assistant-backend.onrender.com/process_audio"; // À MODIFIER
+
+        startButton.addEventListener('click', async () => {
+            if (recognitionInProgress) return;
+
+            audioChunks = [];
+            transcribedTextDiv.textContent = '';
+            geminiResponseDiv.textContent = '';
+            statusDiv.textContent = 'Demande d\'accès au microphone...';
+            startButton.disabled = true;
+            stopButton.disabled = false;
+            recognitionInProgress = true;
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    statusDiv.textContent = 'Envoi de l\'audio pour traitement...';
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob, 'recording.webm');
+
+                    try {
+                        const response = await fetch(FLASK_API_URL, {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        if (!response.ok) {
+                            const errorData = await response.json();
+                            throw new Error(`Erreur du serveur: ${response.status} - ${errorData.error || 'Erreur inconnue'}`);
+                        }
+
+                        const result = await response.json();
+                        transcribedTextDiv.textContent = result.transcribed_text || 'Aucune transcription.';
+                        geminiResponseDiv.textContent = result.gemini_response || 'Aucune réponse Gemini.';
+                        statusDiv.textContent = 'Réponse reçue.';
+
+                        if (result.gemini_response) {
+                            speakText(result.gemini_response);
+                        }
+
+                    } catch (error) {
+                        statusDiv.textContent = `Erreur: ${error.message}`;
+                        console.error('Erreur lors de l\'envoi ou de la réception de la réponse:', error);
+                    } finally {
+                        startButton.disabled = false;
+                        stopButton.disabled = true;
+                        recognitionInProgress = false;
+                        stream.getTracks().forEach(track => track.stop());
+                    }
+                };
+
+                mediaRecorder.start();
+                statusDiv.textContent = 'Enregistrement en cours...';
+
+            } catch (err) {
+                console.error('Erreur d\'accès au microphone:', err);
+                statusDiv.textContent = `Erreur : Impossible d'accéder au microphone. ${err.message}`;
+                startButton.disabled = false;
+                stopButton.disabled = true;
+                recognitionInProgress = false;
+            }
+        });
+
+        stopButton.addEventListener('click', () => {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                statusDiv.textContent = 'Arrêt de l\'enregistrement.';
+                startButton.disabled = true;
+                stopButton.disabled = true;
+            }
+        });
+
+        function speakText(text) {
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'de-DE';
+            window.speechSynthesis.speak(utterance);
+        }
+
+    </script>
+</body>
+</html>
